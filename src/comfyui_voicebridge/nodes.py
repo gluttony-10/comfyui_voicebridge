@@ -20,22 +20,18 @@ from pydub import AudioSegment
 
 # ----------------------------------------------------- SRT to Audio Process --------------------------------------------
 
-# ==================== 数据结构 ====================
 @dataclass
 class SubtitleEntry:
     """字幕条目"""
     index: int
-    start_time_ms: int  # 开始时间(毫秒)
-    end_time_ms: int    # 结束时间(毫秒)
+    start_time_ms: int
+    end_time_ms: int
     text: str
     audio_path: Optional[str] = None
     audio_duration_ms: Optional[int] = None
 
 
-# ==================== SRT解析工具函数 ====================
 def time_to_ms(time_str: str) -> int:
-    """将SRT时间格式转换为毫秒"""
-    # 格式: 00:00:10,233
     time_str = time_str.strip().replace(',', '.')
     parts = time_str.split(':')
     hours = int(parts[0])
@@ -45,7 +41,6 @@ def time_to_ms(time_str: str) -> int:
 
 
 def ms_to_time(ms: int) -> str:
-    """将毫秒转换为SRT时间格式"""
     hours = ms // 3600000
     ms %= 3600000
     minutes = ms // 60000
@@ -56,8 +51,6 @@ def ms_to_time(ms: int) -> str:
 
 
 def parse_srt_string(srt_content: str) -> List[SubtitleEntry]:
-    """解析SRT字符串内容"""
-    # 正则匹配SRT格式
     pattern = r'(\d+)\n([\d:,]+)\s*-->\s*([\d:,]+)\n(.+?)(?=\n\n|\Z)'
     matches = re.findall(pattern, srt_content, re.DOTALL)
     
@@ -78,29 +71,23 @@ def parse_srt_string(srt_content: str) -> List[SubtitleEntry]:
 
 
 def save_srt_string(entries: List[SubtitleEntry]) -> str:
-    """将字幕条目转换为SRT字符串"""
     srt_lines = []
     for entry in entries:
         srt_lines.append(f"{entry.index}")
         srt_lines.append(f"{ms_to_time(entry.start_time_ms)} --> {ms_to_time(entry.end_time_ms)}")
         srt_lines.append(f"{entry.text}")
-        srt_lines.append("")  # 空行分隔
+        srt_lines.append("")
     
     return '\n'.join(srt_lines)
 
 
-# ==================== 音频处理工具函数 ====================
 def get_audio_duration_ms(audio_path: str) -> int:
-    """获取音频时长(毫秒)"""
     audio = AudioSegment.from_file(audio_path)
     return len(audio)
 
 
 def speed_up_audio(input_path: str, output_path: str, speed_factor: float):
-    """使用ffmpeg加速音频"""
-    # atempo范围是0.5-2.0，超出需要链式处理
     if speed_factor > 2.0:
-        # 链式处理
         atempo_filters = []
         remaining = speed_factor
         while remaining > 2.0:
@@ -120,26 +107,20 @@ def speed_up_audio(input_path: str, output_path: str, speed_factor: float):
 
 
 def merge_audio_files(entries: List[SubtitleEntry], total_duration_ms: int) -> Tuple[np.ndarray, int]:
-    """将所有音频片段合并成单个音频"""
-    # 创建静音音轨作为基底
     base_audio = AudioSegment.silent(duration=total_duration_ms)
     
-    # 将每段音频叠加到对应位置
     for entry in entries:
         audio = AudioSegment.from_file(entry.audio_path)
         position = entry.start_time_ms
         base_audio = base_audio.overlay(audio, position=position)
     
-    # 导出到临时文件后读取
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
         tmp_path = tmp.name
     
     base_audio.export(tmp_path, format="wav")
     
-    # 读取为numpy数组
     wav_data, sample_rate = sf.read(tmp_path)
     
-    # 清理临时文件
     try:
         os.unlink(tmp_path)
     except:
@@ -536,25 +517,24 @@ class SRTToAudio:
         batch_size: int = 10
     ):
         """
-        将SRT字幕转换为音频
+        Convert SRT subtitles to audio
         
         Args:
-            model: Qwen3-TTS模型
-            srt_string: SRT格式的字幕字符串
-            voice_clone_prompt: 语音克隆提示
-            language: 语言 (默认auto)
-            tempo_limit: 最大加速倍数限制
-            batch_size: 批量处理大小
+            model: Qwen3-TTS model
+            srt_string: subtitle string in SRT format
+            voice_clone_prompt: voice cloning prompt
+            language: language (default auto)
+            tempo_limit: maximum acceleration multiple limit
+            batch_size: batch processing size
         
         Returns:
-            audio: ComfyUI格式的音频 (waveform, sample_rate)
-            adjusted_srt: 调整后的SRT字符串
+            audio: audio in ComfyUI format (waveform, sample_rate)
+            adjusted_srt: adjusted SRT string
         """
         if not srt_string or not srt_string.strip():
             print("Error: Empty SRT string provided")
             return ({"waveform": np.array([[0.0]]), "sample_rate": 16000}, "")
         
-        # 解析SRT
         print(f"Parsing SRT content ({len(srt_string)} chars)...")
         entries = parse_srt_string(srt_string)
         print(f"Found {len(entries)} subtitle entries")
@@ -563,17 +543,13 @@ class SRTToAudio:
             print("Error: No valid subtitle entries found in SRT")
             return ({"waveform": np.array([[0.0]]), "sample_rate": 16000}, "")
         
-        # 创建临时目录
         temp_dir = tempfile.mkdtemp(prefix="srt_audio_")
         os.makedirs(temp_dir, exist_ok=True)
         print(f"Using temp directory: {temp_dir}")
         
-        # 确定语言
-        # lang = None if language == "auto" else language
         lang = LANGUAGE_MAP.get(language, "auto")
         
         try:
-            # 批量生成音频
             print("Starting audio generation...")
             for i in range(0, len(entries), batch_size):
                 batch = entries[i:i+batch_size]
@@ -582,45 +558,39 @@ class SRTToAudio:
                 
                 print(f"  Generating batch {i//batch_size + 1}: entries {i+1}-{min(i+batch_size, len(entries))}")
                 
-                # 调用模型生成语音
                 wavs, sr = model.generate_voice_clone(
                     text=texts,
                     language=[lang] * len(texts) if lang else [lang] * len(texts),
                     voice_clone_prompt=voice_clone_prompt,
                 )
                 
-                # 保存音频文件
                 for wav, path in zip(wavs, paths):
                     sf.write(path, wav, sr)
                 
-                # 记录生成的音频信息
                 for entry, path in zip(batch, paths):
                     entry.audio_path = path
                     entry.audio_duration_ms = get_audio_duration_ms(path)
                 
-                # 清理GPU内存
                 torch.cuda.empty_cache()
             
-            # 处理时长不匹配
             print("Processing duration mismatches...")
             self._process_duration(entries, temp_dir, tempo_limit)
             
-            # 计算总时长
             last_entry = entries[-1]
             total_duration = last_entry.start_time_ms + last_entry.audio_duration_ms + 1000
             
-            # 合成最终音频
+            # Synthesize the final audio
             print("Merging audio files...")
             wav_tensor, sample_rate = merge_audio_files(entries, total_duration)
 
-            # 准备ComfyUI格式的音频输出
+            # Prepare audio output in ComfyUI format
             audio_output = {
                 "waveform": wav_tensor,
                 "sample_rate": sample_rate
             }
 
             
-            # 生成调整后的SRT字符串
+            # Generate the adjusted SRT string
             adjusted_srt = save_srt_string(entries)
             print(f"Completed! Output audio: {wav_tensor.shape[-1]} samples at {sample_rate}Hz")
             
@@ -631,45 +601,45 @@ class SRTToAudio:
             import traceback
             traceback.print_exc()
             
-            # 清理临时目录
+            # Clean up the temporary directory
             try:
                 shutil.rmtree(temp_dir)
             except:
                 pass
             
-            # 返回静音音频作为fallback
+            # Return a silent audio as fallback
             silent_audio = {"waveform": torch.zeros(1, 16000), "sample_rate": 16000}
             return (silent_audio, "")
     
     def _process_duration(self, entries: List[SubtitleEntry], temp_dir: str, tempo_limit: float):
         """
-        处理音频时长与字幕时长不匹配的问题
+        Handling the issue where the audio duration does not match the subtitle duration
         
         Args:
-            entries: 字幕条目列表
-            temp_dir: 临时文件目录
-            tempo_limit: 最大加速倍数
+            entries: List of subtitle entries
+            temp_dir: Temporary file directory
+            tempo_limit: Maximum acceleration multiple
         """
         for i, entry in enumerate(entries):
             subtitle_duration = entry.end_time_ms - entry.start_time_ms
             audio_duration = entry.audio_duration_ms
             
-            # 计算可用时间(到下一条字幕开始的时间)
+            # Calculate the available time (the time until the next subtitle starts)
             if i < len(entries) - 1:
                 available_time = entries[i+1].start_time_ms - entry.start_time_ms
             else:
-                available_time = subtitle_duration + 5000  # 最后一条多给5秒
+                available_time = subtitle_duration + 5000  # 5 more seconds for safety
             
             print(f"  [{entry.index}] Subtitle: {subtitle_duration}ms, Audio: {audio_duration}ms, Available: {available_time}ms")
             
             if audio_duration <= subtitle_duration:
-                # 音频短于字幕 -> 调整字幕结束时间
+                # If the audio is shorter than the subtitle -> adjust the end time of the subtitle
                 new_end_time = entry.start_time_ms + audio_duration
                 print(f"       -> Audio shorter, adjusting end time: {entry.end_time_ms}ms -> {new_end_time}ms")
                 entry.end_time_ms = new_end_time
                 
             elif audio_duration > available_time:
-                # 音频长于可用时间 -> 加速音频
+                # If the audio is longer than the available time -> speed up the audio
                 speed_factor = audio_duration / available_time
                 
                 if speed_factor > tempo_limit:
@@ -678,17 +648,17 @@ class SRTToAudio:
                 
                 print(f"       -> Audio too long, speeding up by {speed_factor:.2f}x")
                 
-                # 加速音频
+                # Speed up audio
                 sped_up_path = os.path.join(temp_dir, f"audio_{entry.index:04d}_sped.wav")
                 speed_up_audio(entry.audio_path, sped_up_path, speed_factor)
                 entry.audio_path = sped_up_path
                 entry.audio_duration_ms = get_audio_duration_ms(sped_up_path)
                 
-                # 更新字幕结束时间
+                # Update the end time of the subtitle
                 entry.end_time_ms = entry.start_time_ms + entry.audio_duration_ms
                 
             else:
-                # 音频在可用范围内但超过原字幕时长 -> 仅调整字幕结束时间
+                # The audio is within the available range but exceeds the original subtitle duration -> only adjust the subtitle end time
                 print(f"       -> Audio slightly longer than subtitle but within available time, adjusting end time")
                 entry.end_time_ms = entry.start_time_ms + audio_duration
 
